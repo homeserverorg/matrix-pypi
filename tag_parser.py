@@ -3,7 +3,10 @@ from html.parser import HTMLParser
 from html import escape
 
 import logging
-logger = logging.getLogger("uvicorn")
+
+from loggingmx import getLogger
+logger = getLogger(__name__)
+#logger = logging.getLogger("uvicorn")
 
 def replace_netloc(old_url: str, netloc: str):
     parts = urlparse(old_url)

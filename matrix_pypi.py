@@ -1,11 +1,23 @@
+import os
 from urllib.parse import urlparse, urlunparse
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import StreamingResponse
 
 from starlette.types import Send
 import aiohttp
+import aiofiles
 
 from bs4 import BeautifulSoup
+import logging
+from loggingmx import getLogger
+
+logger = getLogger(__name__)
+logger.setLevel('DEBUG')
+
+uv_logger = logging.getLogger("uvicorn")
+uv_logger.addHandler(logger.handlers[0])
+access_logger = logging.getLogger("uvicorn.access")
+access_logger.addHandler(logger.handlers[0])
 
 app = FastAPI()
 
@@ -20,12 +32,14 @@ import logging
 
 from tag_parser import RewriteParser
 
-logger = logging.getLogger("uvicorn")
+#logger = logging.getLogger("uvicorn")
 
 app = FastAPI()
 
 CHUNK_SIZE = 128 * 1024
 
+def get_package_name_hash(url):
+    return url.path.split('/')[-1]
 
 @app.get("/simple/{package_name}/")
 async def get_package_page(package_name: str, request: Request):
@@ -43,24 +57,13 @@ async def get_package_page(package_name: str, request: Request):
         raise HTTPException(status_code=404, detail="Package not found")
 
     async def modify_html_stream(response):
-        async for chunk in response.content.iter_any():
-            chunk = chunk.decode()
-            #logger.info(f'modify_html_stream::{chunk}')
-            modified_chunk = parser.feed(chunk)
-            yield modified_chunk.encode()
-        await session.close()
-
-    async def stream_response(response: ClientResponse):
-        # Stream the response back to the client
-        buffer = b''
-        async for data in response.content.iter_any():
-            buffer += data
-            while len(data) >= CHUNK_SIZE:
-                yield buffer[:128 * 1024]
-                buffer = buffer[128 * 1024:]
-        if buffer:
-            yield buffer
-
+        async with aiofiles.open('test.tar.gz', mode='ab') as f:
+            async for chunk in response.content.iter_any():
+                await f.write(chunk)
+                chunk = chunk.decode()
+                #logger.info(f'modify_html_stream::{chunk}')
+                modified_chunk = parser.feed(chunk)
+                yield modified_chunk.encode()
         # Close the aiohttp ClientSession once we're done streaming
         await session.close()
 
@@ -77,13 +80,17 @@ async def get_package_file(path: str, request: Request):
 
     async def stream_and_close():
         buffer = b''
-        async for data in response.content.iter_any():
-            buffer += data
-            while len(buffer) >= CHUNK_SIZE:
-                yield buffer[:CHUNK_SIZE]
-                buffer = buffer[CHUNK_SIZE:]
-        if buffer:
-            yield buffer
+        package_filename = get_package_name_hash(request.url)
+        async with aiofiles.open(os.path.join(f'packages/{package_filename}'), mode='ab') as f:
+            async for data in response.content.iter_any():
+                buffer += data
+                while len(buffer) >= CHUNK_SIZE:
+                    await f.write(buffer[:CHUNK_SIZE])
+                    yield buffer[:CHUNK_SIZE]
+                    buffer = buffer[CHUNK_SIZE:]
+            if buffer:
+                await f.write(buffer)
+                yield buffer
         await session.close()
 
     headers = dict(response.headers)
